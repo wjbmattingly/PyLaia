@@ -78,9 +78,25 @@ class EngineModule(pl.LightningModule):
         return [optimizer], [scheduler]
 
     def prepare_batch(self, batch: Any) -> Tuple[Any, Any]:
+        """Prepare the batch for the model.
+        
+        Args:
+            batch: The batch from the DataLoader
+            
+        Returns:
+            tuple: (input_data, target_data)
+        """
+        # If custom batch processing functions are provided, use them
         if self.batch_input_fn and self.batch_target_fn:
             return self.batch_input_fn(batch), self.batch_target_fn(batch)
+            
+        # Handle the case where batch is a tuple of (input, target)
         if isinstance(batch, tuple) and len(batch) == 2:
+            x, y = batch
+            return x, y
+            
+        # Handle the case where batch is a list containing [input, target]
+        if isinstance(batch, list) and len(batch) == 2:
             x, y = batch
             # If x is already a tensor, use it directly
             if isinstance(x, torch.Tensor):
@@ -89,6 +105,8 @@ class EngineModule(pl.LightningModule):
             if isinstance(x, list) and all(isinstance(item, torch.Tensor) for item in x):
                 x = torch.stack(x)
             return x, y
+            
+        # Default case: return the batch as is
         return batch, None
 
     def check_tensor(self, batch: Any, batch_y_hat: Any) -> None:
