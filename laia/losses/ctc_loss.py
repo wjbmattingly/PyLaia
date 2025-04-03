@@ -11,7 +11,14 @@ _logger = log.get_logger(__name__)
 
 
 def transform_batch(batch):
-    # size: T x N x C
+    """Transform a batch for CTC loss computation.
+    
+    Args:
+        batch: Input batch, either a PackedSequence or a Tensor
+        
+    Returns:
+        tuple: (x, xs) where x is the input tensor and xs is the sequence lengths
+    """
     if isinstance(batch, torch.nn.utils.rnn.PackedSequence):
         x, xs = pad_packed_sequence(batch)
     elif isinstance(batch, torch.Tensor):
@@ -94,25 +101,28 @@ class CTCLoss(Loss):
         # prepare tensors of the correct type
         x = torch.nn.functional.log_softmax(x, dim=-1)
         
-        # Move tensors to CPU for CTC loss computation if on MPS
-        if x.device.type == "mps":
-            x = x.cpu()
+        # Get the device of the input tensor
+        device = x.device
         
-        cpu = torch.device("cpu")
-        xs = (
-            xs.detach().to(dtype=torch.int, device=cpu)
-            if isinstance(xs, torch.Tensor)
-            else torch.tensor(xs, dtype=torch.int, device=cpu)
-        )
-        ys = torch.tensor([len(y_n) for y_n in y], dtype=torch.int, device=cpu)
-        y = torch.tensor(list(itertools.chain.from_iterable(y)), dtype=torch.int)
+        # Convert xs to tensor if it's not already
+        if not isinstance(xs, torch.Tensor):
+            xs = torch.tensor(xs, dtype=torch.int, device=device)
+        else:
+            xs = xs.to(dtype=torch.int, device=device)
+            
+        # Convert ys to tensor
+        ys = torch.tensor([len(y_n) for y_n in y], dtype=torch.int, device=device)
+        
+        # Convert y to tensor
+        y = torch.tensor(list(itertools.chain.from_iterable(y)), dtype=torch.int, device=device)
 
         # keep valid indices
-        valid_indices = torch.tensor(valid_indices, device=cpu)
-        x = x.index_select(1, valid_indices.to(device=x.device))  # Select valid batch items
+        valid_indices = torch.tensor(valid_indices, device=device)
+        x = x.index_select(1, valid_indices)  # Select valid batch items
         xs = xs.index_select(0, valid_indices)
         ys = ys.index_select(0, valid_indices)
 
+        # Compute CTC loss
         losses = torch.nn.functional.ctc_loss(
             log_probs=x,
             targets=y,
@@ -122,10 +132,6 @@ class CTCLoss(Loss):
             reduction="none",
             zero_infinity=True,
         )
-
-        # Move result back to original device if needed
-        if x.device.type == "mps":
-            losses = losses.to(x.device)
 
         if self.average_frames:
             losses = losses / xs.to(losses)
