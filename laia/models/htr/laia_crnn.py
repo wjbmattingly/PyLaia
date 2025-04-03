@@ -106,10 +106,6 @@ class LaiaCRNN(nn.Module):
     def forward(
         self, x: Union[torch.Tensor, PaddedTensor]
     ) -> Union[torch.Tensor, PackedSequence]:
-        # Ensure x is a tensor
-        if not isinstance(x, torch.Tensor):
-            x = torch.stack(x) if isinstance(x, list) else x
-            
         if isinstance(x, PaddedTensor):
             xs = self.get_self_conv_output_size(x.sizes)
             err_indices = [i for i, x in enumerate((xs < 1).any(1)) if x]
@@ -119,6 +115,9 @@ class LaiaCRNN(nn.Module):
                     f"with sizes {x.sizes[err_indices].tolist()} "
                     f"would produce invalid output sizes {xs[err_indices].tolist()}"
                 )
+        elif not isinstance(x, torch.Tensor):
+            raise TypeError(f"Expected torch.Tensor or PaddedTensor, got {type(x)}")
+            
         x = self.conv(x)
         x = self.sequencer(x)
         x = self.dropout(x, p=self._rnn_dropout)
