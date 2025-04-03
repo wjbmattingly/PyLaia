@@ -106,11 +106,16 @@ data/
 ```
 
 ```bash
-python -m laia.scripts.htr.predict \
-    --checkpoint /Users/wjm55/PyLaia/output/lightning_logs/version_14/checkpoints/best-epoch=12-va_loss=128.2928.ckpt \
-    --image train/sample_27.png \
+python -m laia.scripts.htr.train_handwritten \
+    --data_dir data \
+    --train_file data/train.json \
+    --val_file data/val.json \
     --char_map data/char_map.json \
-    --data_dir data
+    --batch_size 8 \
+    --epochs 100 \
+    --learning_rate 0.0001 \
+    --output_dir output \
+    --gpu 0
 ```
 
 ## BibTeX
