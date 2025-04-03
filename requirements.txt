@@ -9,4 +9,4 @@ torchvision>=0.15.0,<1.0.0
 torchaudio>=2.0.0,<3.0.0
 jsonargparse[signatures]==4.7
 imagesize==1.4.1
-dataclasses; python_version < '3.7'
+dataclasses; python_version < '3.10'

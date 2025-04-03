@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+import numpy as np
 
 import torch
 from PIL import Image
@@ -40,32 +41,68 @@ def preprocess_image(image_path, data_dir=None):
     # Load image in grayscale
     img = Image.open(image_path).convert('L')
     
-    # Define transforms
+    # Get image size
+    w, h = img.size
+    print(f"Original image size: {w}x{h}")
+    
+    # Normalize height to 128 pixels while maintaining aspect ratio
+    target_height = 128
+    new_width = int(w * (target_height / h))
+    img = img.resize((new_width, target_height), Image.Resampling.BILINEAR)
+    print(f"Resized image size: {new_width}x{target_height}")
+    
+    # Define transforms - match training normalization
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5], std=[0.5])
+        transforms.Normalize(mean=[0.5], std=[0.5])  # Same as training
     ])
     
     # Apply transforms
     img_tensor = transform(img)
+    
     # Add batch dimension
     img_tensor = img_tensor.unsqueeze(0)
+    
+    print(f"Tensor value range: [{img_tensor.min():.3f}, {img_tensor.max():.3f}]")
+    print(f"Tensor mean: {img_tensor.mean():.3f}")
+    print(f"Tensor std: {img_tensor.std():.3f}")
+    
     return img_tensor
 
 def decode_predictions(output, idx_to_char):
     """Convert model output to text"""
+    print(f"\nDebug information:")
+    print(f"Output shape: {output.shape}")  # Should be [T, N, C]
+    print(f"Number of classes: {len(idx_to_char)}")
+    
     # Get predictions
-    probs = torch.nn.functional.softmax(output, dim=2)
-    best_paths = torch.argmax(probs, dim=2)
+    probs = torch.nn.functional.softmax(output, dim=2)  # [T, N, C]
+    best_paths = torch.argmax(probs, dim=2)  # [T, N]
+    
+    print(f"Best paths shape: {best_paths.shape}")
+    print(f"Sample predictions (first 10 timesteps): {best_paths[:10, 0].tolist()}")
+    
+    # Get top-3 predictions for first few timesteps
+    top_probs, top_indices = torch.topk(probs[:10, 0, :], k=3, dim=1)
+    print("\nTop-3 predictions for first 10 timesteps:")
+    for t, (indices, probabilities) in enumerate(zip(top_indices, top_probs)):
+        chars = [idx_to_char.get(idx.item(), '?') for idx in indices]
+        probs_str = [f"{p.item():.4f}" for p in probabilities]
+        print(f"t={t}: {list(zip(chars, probs_str))}")
     
     # Convert to text (simple greedy decoding)
     text = []
     prev_char = None
-    for char_idx in best_paths[0].tolist():  # Take first batch item
+    for t in range(best_paths.size(0)):  # Iterate over time steps
+        char_idx = best_paths[t, 0].item()  # Take first batch item
         if char_idx != 0 and char_idx != prev_char:  # Skip blank and repeated characters
-            text.append(idx_to_char.get(char_idx, '?'))
-        prev_char = char_idx
-    return ''.join(text)
+            char = idx_to_char.get(char_idx, '?')
+            text.append(char)
+            prev_char = char_idx
+    
+    result = ''.join(text)
+    print(f"\nFinal decoded text length: {len(result)}")
+    return result
 
 def main():
     parser = argparse.ArgumentParser()
@@ -77,10 +114,14 @@ def main():
                       help='Path to character map JSON file')
     parser.add_argument('--data_dir', type=str, default='data',
                       help='Path to data directory containing images')
+    parser.add_argument('--invert_colors', action='store_true',
+                      help='Invert image colors (black->white, white->black)')
     args = parser.parse_args()
 
     # Load character map
     idx_to_char, num_classes = load_char_map(args.char_map)
+    print(f"\nLoaded character map with {num_classes} classes")
+    print("Sample characters:", {i: c for i, c in list(idx_to_char.items())[:10]})
     
     # Initialize model with parameters matching the checkpoint
     cnn_features = [16, 32, 48, 64]  # CNN feature dimensions
@@ -95,12 +136,18 @@ def main():
         cnn_poolsize=[(2, 2)] * 4,  # 2x2 pooling
         cnn_dropout=[0.0] * 4,  # No dropout
         cnn_batchnorm=[True] * 4,  # Use batch normalization
-        image_sequencer="maxpool-8",  # Use maxpool-8 to match the RNN input size
+        image_sequencer="maxpool-8",  # Use maxpool-8 to get 512 input features (64 * 8 = 512)
         rnn_units=256,  # Matches checkpoint (1024/4 since bidirectional=True and we have 2 directions)
         rnn_layers=3,
         rnn_dropout=0.5,
         lin_dropout=0.5,
     )
+    print("\nModel configuration:")
+    print(f"CNN features: {cnn_features}")
+    print(f"Last CNN layer output features: {cnn_features[-1]}")
+    print(f"Image sequencer: maxpool-8 ({cnn_features[-1]} * 8 = {cnn_features[-1] * 8} RNN input features)")
+    print(f"RNN units: {256 * 2} (bidirectional)")
+    print(f"Number of classes: {num_classes}")
     criterion = CTCLoss()
     
     # Add all necessary safe globals
@@ -115,7 +162,7 @@ def main():
     
     # Load model
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
-    print(f"Loading checkpoint from: {args.checkpoint}")
+    print(f"\nLoading checkpoint from: {args.checkpoint}")
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     print("Checkpoint loaded successfully")
     
@@ -133,7 +180,7 @@ def main():
         # Handle direct model state dict
         state_dict = checkpoint
     
-    print("Applying weights to model...")
+    print("\nApplying weights to model...")
     # Load state dict into model
     model.load_state_dict(state_dict)
     model.eval()
@@ -141,17 +188,19 @@ def main():
     print(f"Model loaded successfully and moved to device: {device}")
     
     # Preprocess image
-    print(f"Processing image: {args.image}")
+    print(f"\nProcessing image: {args.image}")
     img_tensor = preprocess_image(args.image, args.data_dir)
+    print(f"Input tensor shape: {img_tensor.shape}")
     img_tensor = img_tensor.to(device)
     
     # Run inference
     with torch.no_grad():
         output = model(img_tensor)  # Use model directly
+        print(f"Raw model output shape: {output.shape}")
     
     # Decode predictions
     text = decode_predictions(output, idx_to_char)
-    print(f"Predicted text: {text}")
+    print(f"\nPredicted text: {text}")
 
 if __name__ == '__main__':
     main() 

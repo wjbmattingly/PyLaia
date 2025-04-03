@@ -107,10 +107,10 @@ data/
 
 ```bash
 python -m laia.scripts.htr.train_handwritten \
-    --data_dir data \
-    --train_file data/train.json \
-    --val_file data/val.json \
-    --char_map data/char_map.json \
+    --data_dir sample_data \
+    --train_file sample_data/train.json \
+    --val_file sample_data/val.json \
+    --char_map sample_data/char_map.json \
     --batch_size 8 \
     --epochs 100 \
     --learning_rate 0.0001 \
