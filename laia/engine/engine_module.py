@@ -82,9 +82,11 @@ class EngineModule(pl.LightningModule):
             return self.batch_input_fn(batch), self.batch_target_fn(batch)
         if isinstance(batch, tuple) and len(batch) == 2:
             x, y = batch
-            # Ensure x is a tensor if it's a list
-            if isinstance(x, list):
-                x = torch.stack(x)
+            # Ensure x is a tensor and on the correct device
+            if not isinstance(x, torch.Tensor):
+                x = torch.stack(x) if isinstance(x, list) else x
+            if hasattr(self, 'device') and x.device != self.device:
+                x = x.to(self.device)
             return x, y
         return batch, None
 

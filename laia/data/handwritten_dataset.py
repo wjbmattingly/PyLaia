@@ -100,4 +100,4 @@ class HandwrittenDataset(ImageDataset):
         # Stack images into batch
         batched_images = torch.stack(padded_images)
         
-        return batched_images, list(texts) 
+        return batched_images, list(texts)
