@@ -81,7 +81,11 @@ class EngineModule(pl.LightningModule):
         if self.batch_input_fn and self.batch_target_fn:
             return self.batch_input_fn(batch), self.batch_target_fn(batch)
         if isinstance(batch, tuple) and len(batch) == 2:
-            return batch
+            x, y = batch
+            # Ensure x is a tensor if it's a list
+            if isinstance(x, list):
+                x = torch.stack(x)
+            return x, y
         return batch, None
 
     def check_tensor(self, batch: Any, batch_y_hat: Any) -> None:
