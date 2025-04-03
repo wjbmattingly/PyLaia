@@ -14,8 +14,8 @@ class EngineModule(pl.LightningModule):
     def __init__(
         self,
         model: torch.nn.Module,
-        criterion: Callable,
-        optimizer: OptimizerArgs = OptimizerArgs(),
+        criterion: torch.nn.Module,
+        optimizer: Optional[OptimizerArgs] = None,
         scheduler: Optional[SchedulerArgs] = None,
         batch_input_fn: Optional[Callable] = None,
         batch_target_fn: Optional[Callable] = None,
@@ -23,61 +23,59 @@ class EngineModule(pl.LightningModule):
     ):
         super().__init__()
         self.model = model
-        # configure_optimizers()
-        self.optimizer = optimizer
-        self.scheduler = scheduler
-        # compute_loss()
         self.criterion = criterion
-        # prepare_batch()
         self.batch_input_fn = batch_input_fn
         self.batch_target_fn = batch_target_fn
-        # exception_catcher(), check_tensor(), compute_loss()
         self.batch_id_fn = batch_id_fn
-        # training_step(), validation_step()
         self.batch_y_hat = None
-        # required by auto_lr_find
-        self.lr = optimizer.learning_rate
+        
+        # Save optimizer and scheduler configs
+        if optimizer is not None:
+            self.lr = optimizer.learning_rate
+        else:
+            self.lr = None  # For inference only
+            
+        self.save_hyperparameters()
 
     def configure_optimizers(self):
-        weight_decay = self.optimizer.weight_l2_penalty
-        if self.optimizer.name == "SGD":
+        """Configure optimizers for training."""
+        optimizer_name = self.hparams.optimizer.name.lower()
+        learning_rate = self.hparams.optimizer.learning_rate
+
+        if optimizer_name == "sgd":
             optimizer = torch.optim.SGD(
                 self.parameters(),
-                lr=self.lr,
-                momentum=self.optimizer.momentum,
-                weight_decay=weight_decay,
-                nesterov=self.optimizer.nesterov,
+                lr=learning_rate
             )
-        elif self.optimizer.name == "RMSProp":
+        elif optimizer_name == "rmsprop":
             optimizer = torch.optim.RMSprop(
                 self.parameters(),
-                lr=self.lr,
-                weight_decay=weight_decay,
-                momentum=self.optimizer.momentum,
+                lr=learning_rate
             )
-        elif self.optimizer.name == "Adam":
+        elif optimizer_name == "adam":
             optimizer = torch.optim.Adam(
                 self.parameters(),
-                lr=self.lr,
-                weight_decay=weight_decay,
+                lr=learning_rate
             )
         else:
-            raise NotImplementedError(f"Optimizer: {self.optimizer.name}")
-        if self.scheduler is not None and self.scheduler.active:
-            scheduler = {
-                "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer,
-                    mode="min",
-                    factor=self.scheduler.factor,
-                    patience=self.scheduler.patience - 1,
-                ),
-                "monitor": self.scheduler.monitor,
-                "interval": "epoch",
-                "frequency": 1,
-                "strict": False,
-            }
-            return [optimizer], [scheduler]
-        return optimizer
+            raise ValueError(f"Unknown optimizer: {optimizer_name}")
+
+        if not self.hparams.scheduler:
+            return optimizer
+
+        scheduler = {
+            "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="min",
+                factor=self.hparams.scheduler.factor,
+                patience=self.hparams.scheduler.patience,
+            ),
+            "monitor": self.hparams.scheduler.monitor,
+            "interval": "epoch",
+            "frequency": 1,
+        }
+
+        return [optimizer], [scheduler]
 
     def prepare_batch(self, batch: Any) -> Tuple[Any, Any]:
         if self.batch_input_fn and self.batch_target_fn:
@@ -117,12 +115,6 @@ class EngineModule(pl.LightningModule):
                 if not torch.isfinite(batch_loss).all():
                     raise ValueError("The loss is NaN or ± inf")
             return batch_loss
-
-    # TODO: find out how to get the batch here
-    # TODO: check gradients after backward
-    # def backward(self, loss, *args, **kwargs):
-    #     with self.exception_catcher(batch):
-    #         super().backward(loss, *args, **kwargs)
 
     def training_step(self, batch: Any, *_, **__):
         batch_x, batch_y = self.prepare_batch(batch)

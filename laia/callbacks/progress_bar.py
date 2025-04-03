@@ -1,24 +1,36 @@
 import sys
 from collections import defaultdict
 from logging import INFO
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks.progress import convert_inf
+from pytorch_lightning.callbacks import ProgressBar as PLProgressBar
+from pytorch_lightning.callbacks.progress.tqdm_progress import Tqdm
 from tqdm.auto import tqdm
 
 import laia.common.logging as log
 from laia.callbacks.meters import Timer
+import math
 
 
-class ProgressBar(pl.callbacks.ProgressBar):
+def _format_num(n: Union[int, float]) -> str:
+    """Format number for display."""
+    if math.isinf(n):
+        return "∞" if n > 0 else "-∞"
+    return f"{n:.3g}"
+
+
+class ProgressBar(PLProgressBar):
+    """Custom progress bar for PyLaia training."""
+
     def __init__(
         self,
         refresh_rate: int = 1,
         ncols: Optional[int] = 120,
         dynamic_ncols: bool = True,
+        process_position: int = 0,
     ):
-        super().__init__(refresh_rate=refresh_rate)
+        super().__init__(refresh_rate=refresh_rate, process_position=process_position)
         self.ncols = ncols
         self.dynamic_ncols = dynamic_ncols
         self.running_sanity = None
@@ -40,16 +52,14 @@ class ProgressBar(pl.callbacks.ProgressBar):
     def format_factory():
         return "{}"
 
-    def init_sanity_tqdm(self) -> tqdm:
-        return tqdm(
-            desc="VA sanity check",
-            position=(2 * self.process_position),
-            disable=self.is_disabled,
-            leave=False,
-            ncols=self.ncols,
-            dynamic_ncols=self.dynamic_ncols,
-            file=sys.stderr,
-        )
+    def get_metrics(self, trainer: "pl.Trainer", model: "pl.LightningModule") -> Dict[str, Union[int, float, str]]:
+        items = super().get_metrics(trainer, model)
+        return {k: _format_num(v) if isinstance(v, (int, float)) else v for k, v in items.items()}
+
+    def init_sanity_tqdm(self) -> Tqdm:
+        bar = super().init_sanity_tqdm()
+        bar.set_description("Validation sanity check")
+        return bar
 
     def init_train_tqdm(self) -> tqdm:
         return tqdm(
@@ -88,9 +98,9 @@ class ProgressBar(pl.callbacks.ProgressBar):
 
     def on_epoch_start(self, trainer, *args, **kwargs):
         # skip parent
-        super(pl.callbacks.ProgressBar, self).on_epoch_start(trainer, *args, **kwargs)
+        super(PLProgressBar, self).on_epoch_start(trainer, *args, **kwargs)
         if not self.main_progress_bar.disable:
-            self.main_progress_bar.reset(convert_inf(self.total_train_batches))
+            self.main_progress_bar.reset(self.total_train_batches)
         self.main_progress_bar.set_description_str(f"TR - E{trainer.current_epoch}")
 
     def on_train_epoch_start(self, *args, **kwargs):
@@ -108,7 +118,7 @@ class ProgressBar(pl.callbacks.ProgressBar):
 
     def on_train_batch_end(self, trainer, *args, **kwargs):
         # skip parent to avoid two postfix calls
-        super(pl.callbacks.ProgressBar, self).on_train_batch_end(
+        super(PLProgressBar, self).on_train_batch_end(
             trainer, *args, **kwargs
         )
         if self._should_update(self.train_batch_idx, self.total_train_batches):
@@ -175,7 +185,7 @@ class ProgressBar(pl.callbacks.ProgressBar):
 
     def on_validation_batch_end(self, *args, **kwargs):
         # skip parent
-        super(pl.callbacks.ProgressBar, self).on_validation_batch_end(*args, **kwargs)
+        super(PLProgressBar, self).on_validation_batch_end(*args, **kwargs)
         if self._should_update(self.val_batch_idx, self.total_val_batches):
             self._update_bar(self.val_progress_bar)
 
@@ -193,7 +203,7 @@ class ProgressBar(pl.callbacks.ProgressBar):
 
     def on_validation_end(self, *args, **kwargs):
         # skip parent to avoid postfix call
-        super(pl.callbacks.ProgressBar, self).on_validation_end(*args, **kwargs)
+        super(PLProgressBar, self).on_validation_end(*args, **kwargs)
         self.val_progress_bar.close()
 
     def on_test_end(self, *args, **kwargs):

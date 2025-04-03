@@ -1,63 +1,65 @@
-from typing import Dict, List, Tuple
+import os
+from typing import Any, Dict, Optional
 
 import pytorch_lightning as pl
 from pytorch_lightning.utilities import rank_zero_only
-from pytorch_lightning.utilities.exceptions import MisconfigurationException
 
 import laia.common.logging as log
 
 _logger = log.get_logger(__name__)
 
 
-class ProgressBarGPUStats(pl.callbacks.GPUStatsMonitor):
-    def __init__(self):
-        super().__init__(
-            memory_utilization=True,
-            gpu_utilization=False,
-            intra_step_time=False,
-            inter_step_time=False,
-            fan_speed=False,
-            temperature=False,
-        )
+class ProgressBarGPUStats(pl.callbacks.DeviceStatsMonitor):
+    """Monitor GPU stats during training and add them to the progress bar."""
 
-    def on_train_start(self, trainer, *args, **kwargs):
-        if not trainer.on_gpu:
-            raise MisconfigurationException(
-                "You are using GPUStatsMonitor but are not running on GPU"
-                f" since gpus attribute in Trainer is set to {trainer.gpus}."
-            )
-        self._gpu_ids = ",".join(map(str, trainer.data_parallel_device_ids))
+    def __init__(self, memory_utilization: bool = True, gpu_utilization: bool = True):
+        super().__init__()
+        self._gpu_ids = None
+        self.memory_utilization = memory_utilization
+        self.gpu_utilization = gpu_utilization
 
-    def on_train_batch_start(self, *_, **__):
-        pass
+    def setup(self, trainer: "pl.Trainer", *args, **kwargs) -> None:
+        super().setup(trainer, *args, **kwargs)
+        if trainer.strategy.root_device.type == "cuda":
+            self._gpu_ids = ",".join(map(str, trainer.device_ids))
 
     @rank_zero_only
-    def on_train_batch_end(self, trainer, *_, **__):
-        gpu_stat_keys = self._get_gpu_stat_keys() + self._get_gpu_device_stat_keys()
-        gpu_stats = self._get_gpu_stats([k for k, _ in gpu_stat_keys])
-        log.debug("GPU stats: {}", gpu_stats)
-        progress_bar_metrics = ProgressBarGPUStats.parse_gpu_stats(
-            self._gpu_ids, gpu_stats, gpu_stat_keys
-        )
-        trainer.progress_bar_metrics["gpu_stats"] = progress_bar_metrics
+    def on_train_batch_end(self, trainer: "pl.Trainer", *args, **kwargs) -> None:
+        if not self._gpu_ids:
+            return
 
-    @staticmethod
-    def parse_gpu_stats(
-        gpu_ids: str, stats: List[List[float]], keys: List[Tuple[str, str]]
-    ) -> Dict[str, str]:
-        j1, j2, used_unit, free_unit = None, None, None, None
-        for i, k in enumerate(keys):
-            if k[0] == "memory.used":
-                j1, used_unit = i, k[1]
-            elif k[0] == "memory.free":
-                j2, free_unit = i, k[1]
+        stats = {}
+        if self.memory_utilization:
+            memory_usage = self.get_memory_usage()
+            if memory_usage:
+                stats["GPU mem"] = f"{memory_usage:.1f}GB"
 
-        assert j1 is not None and j2 is not None
-        assert used_unit == free_unit
-        gpu_ids = gpu_ids.split(",")
-        assert len(gpu_ids) == len(stats)
+        if self.gpu_utilization:
+            gpu_usage = self.get_gpu_utilization()
+            if gpu_usage:
+                stats["GPU util"] = f"{gpu_usage:.1f}%"
 
-        return {
-            f"GPU-{gpu_id}": f"{int(stats[i][j1])}/{int(stats[i][j1] + stats[i][j2])}{used_unit}"
-            for i, gpu_id in enumerate(gpu_ids)
-        }
+        if stats:
+            trainer.progress_bar_metrics["gpu_stats"] = stats
+
+    def get_memory_usage(self) -> Optional[float]:
+        """Get GPU memory usage in GB."""
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return None
+            memory_allocated = torch.cuda.memory_allocated() / (1024 ** 3)
+            return memory_allocated
+        except:
+            return None
+
+    def get_gpu_utilization(self) -> Optional[float]:
+        """Get GPU utilization percentage."""
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            info = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            return info.gpu
+        except:
+            return None

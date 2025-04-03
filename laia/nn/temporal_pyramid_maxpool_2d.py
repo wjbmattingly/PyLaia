@@ -1,58 +1,53 @@
-from typing import Sequence, Union
-
 import torch
-from nnutils_pytorch import adaptive_maxpool_2d
+import torch.nn.functional as F
+from torch import Tensor
+from typing import List, Tuple, Union
 
 from laia.data import PaddedTensor
 
 
-def _adaptive_maxpool_2d(batch_input, output_sizes, batch_sizes, use_nnutils):
-    if use_nnutils:
-        return adaptive_maxpool_2d(
-            batch_input=batch_input, output_sizes=output_sizes, batch_sizes=batch_sizes
-        )
-    if batch_sizes is None:
-        return torch.nn.functional.adaptive_max_pool2d(
-            input=batch_input, output_size=output_sizes
-        )
-    to_stack = []
-    for n in range(batch_input.size(0)):
-        nh, nw = int(batch_sizes[n, 0]), int(batch_sizes[n, 1])
-        batch_view = batch_input[n, :, :nh, :nw].contiguous()
-        to_stack.append(
-            torch.nn.functional.adaptive_max_pool2d(
-                input=batch_view, output_size=output_sizes
-            )
-        )
-    return torch.stack(to_stack)
+def temporal_maxpool_2d(x: Tensor, output_size: Union[int, Tuple[int, int], List[int]]) -> Tensor:
+    """Applies temporal max pooling over an input signal.
+    
+    Args:
+        x: Input tensor of shape (N, C, H, W)
+        output_size: Desired output size (H_out, W_out)
+        
+    Returns:
+        Output tensor of shape (N, C, H_out, W_out)
+    """
+    if isinstance(output_size, int):
+        output_size = (output_size, output_size)
+    elif isinstance(output_size, list):
+        output_size = tuple(output_size)
+    return F.adaptive_max_pool2d(x, output_size)
 
 
 class TemporalPyramidMaxPool2d(torch.nn.Module):
-    def __init__(
-        self, levels: Sequence[int], vertical: bool = False, use_nnutils: bool = True
-    ) -> None:
+    """Temporal pyramid max pooling layer."""
+
+    def __init__(self, levels: List[int], height: int = 1):
+        """Initialize the pooling layer.
+        
+        Args:
+            levels: List of temporal levels for pooling
+            height: Height of the output feature maps
+        """
         super().__init__()
-        self._levels = levels
-        self._vertical = vertical
-        self._use_nnutils = use_nnutils
+        self.levels = levels
+        self.height = height
 
-    def forward(self, x: Union[torch.Tensor, PaddedTensor]) -> torch.Tensor:
-        if isinstance(x, PaddedTensor):
-            x, xs = x.data, x.sizes
-        else:
-            xs = None
-
-        n, c, _, _ = x.size()
-
-        out_levels = []
-        for level in self._levels:
-            output_sizes = (level, 1) if self._vertical else (1, level)
-            y = _adaptive_maxpool_2d(
-                batch_input=x,
-                output_sizes=output_sizes,
-                batch_sizes=xs,
-                use_nnutils=self._use_nnutils,
-            )
-            out_levels.append(y.view(n, c * level))
-
-        return torch.cat(out_levels, dim=1)
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward pass.
+        
+        Args:
+            x: Input tensor of shape (N, C, H, W)
+            
+        Returns:
+            Output tensor containing pooled features at different temporal levels
+        """
+        features = []
+        for level in self.levels:
+            pooled = temporal_maxpool_2d(x, (self.height, level))
+            features.append(pooled)
+        return torch.cat(features, dim=3)

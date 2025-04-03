@@ -1,0 +1,12 @@
+optimizer: !!python/object:laia.common.arguments.OptimizerArgs
+  learning_rate: 0.0001
+  momentum: 0.0
+  name: !!python/object/apply:laia.common.arguments.Name
+  - Adam
+  nesterov: false
+  weight_l2_penalty: 0.0
+scheduler: !!python/object:laia.common.arguments.SchedulerArgs
+  active: true
+  factor: 0.5
+  monitor: va_loss
+  patience: 5

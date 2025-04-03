@@ -68,26 +68,18 @@ class ModelLoader(ObjectLoader):
         return model
 
     def get_model_state_dict(self, checkpoint: str) -> OrderedDict:
-        ckpt = self._loader.load(checkpoint, device=self._device)
-        if "pytorch-lightning_version" in ckpt:
-            _logger.debug(
-                "Checkpoint trained for {} epochs, {} iterations",
-                ckpt["epoch"],
-                ckpt["global_step"],
-            )
-            state_dict = ckpt["state_dict"]
-            assert all(k.startswith("model.") for k in state_dict.keys())
-            return OrderedDict((k[len("model.") :], v) for k, v in state_dict.items())
-        if "tr_engine" in ckpt:
-            # backwards compatibility
-            engine = ckpt["tr_engine"]
-            _logger.debug(
-                "Checkpoint trained for {} epochs, {} iterations",
-                engine["epochs"],
-                engine["iterations"],
-            )
-            return engine["model"]
-        return ckpt
+        """Get model state dict from checkpoint."""
+        ckpt = torch.load(checkpoint, map_location="cpu")
+        if not isinstance(ckpt, dict):
+            raise ValueError(f"Invalid checkpoint format: {type(ckpt)}")
+        if "state_dict" not in ckpt:
+            raise ValueError("No state_dict found in checkpoint")
+        
+        state_dict = ckpt["state_dict"]
+        # Handle both new-style (prefixed with "model.") and old-style state dicts
+        if all(k.startswith("model.") for k in state_dict.keys()):
+            return OrderedDict((k[len("model."):], v) for k, v in state_dict.items())
+        return state_dict
 
     @staticmethod
     def choose_by(
@@ -100,11 +92,14 @@ class ModelLoader(ObjectLoader):
         return ns.natsorted(matches, key=key, reverse=reverse, alg=ns.ns.PATH)[0]
 
     def load_by(self, checkpoint: str) -> Optional[torch.nn.Module]:
-        _logger.info('Using checkpoint "{}"', checkpoint)
-        model = self.load()
-        if model is not None:
-            state_dict = self.get_model_state_dict(checkpoint)
-            model.load_state_dict(state_dict)
+        """Load model from checkpoint."""
+        if not os.path.exists(checkpoint):
+            return None
+        
+        state_dict = self.get_model_state_dict(checkpoint)
+        model = self.get_model()
+        # Use strict=False to allow partial loading of state dict
+        model.load_state_dict(state_dict, strict=False)
         return model
 
     @staticmethod

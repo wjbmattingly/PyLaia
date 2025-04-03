@@ -1,34 +1,48 @@
-from typing import Sequence, Union
-
 import torch
+from typing import List, Optional, Tuple, Union
 
 from laia.data import PaddedTensor
-from laia.nn.temporal_pyramid_maxpool_2d import _adaptive_maxpool_2d
+from laia.nn.adaptive_pool_2d import adaptive_maxpool_2d
 
 
 class PyramidMaxPool2d(torch.nn.Module):
-    def __init__(self, levels: Sequence[int], use_nnutils: bool = True) -> None:
+    """Pyramid max pooling layer that supports PaddedTensor inputs."""
+
+    def __init__(self, levels: List[int], vertical: bool = False):
+        """Initialize the pooling layer.
+        
+        Args:
+            levels: List of pooling levels
+            vertical: If True, pool vertically, otherwise horizontally
+        """
         super().__init__()
-        self._levels = tuple(levels)
-        self._use_nnutils = use_nnutils
+        self.levels = levels
+        self.vertical = vertical
 
     def forward(self, x: Union[torch.Tensor, PaddedTensor]) -> torch.Tensor:
+        """Forward pass.
+        
+        Args:
+            x: Input tensor or PaddedTensor of shape (N, C, H, W)
+            
+        Returns:
+            Tensor containing concatenated pooled features
+        """
         if isinstance(x, PaddedTensor):
             x, xs = x.data, x.sizes
         else:
             xs = None
 
-        n, c, _, _ = x.size()
-
-        out_levels = []
-        for level in self._levels:
-            size = 2 ** (level - 1)
-            y = _adaptive_maxpool_2d(
+        n, c = x.size()[:2]
+        features = []
+        
+        for level in self.levels:
+            output_sizes = (level, 1) if self.vertical else (1, level)
+            pooled = adaptive_maxpool_2d(
                 batch_input=x,
-                output_sizes=(size, size),
-                batch_sizes=xs,
-                use_nnutils=self._use_nnutils,
+                output_sizes=output_sizes,
+                batch_sizes=xs
             )
-            out_levels.append(y.view(n, c * size * size))
+            features.append(pooled.view(n, c * level))
 
-        return torch.cat(out_levels, dim=1)
+        return torch.cat(features, dim=1)

@@ -2,6 +2,7 @@ import itertools
 from typing import Dict, List, Optional, Tuple
 
 import torch
+from torch.nn.utils.rnn import pad_packed_sequence
 
 import laia.common.logging as log
 from laia.losses.loss import Loss
@@ -12,7 +13,7 @@ _logger = log.get_logger(__name__)
 def transform_batch(batch):
     # size: T x N x C
     if isinstance(batch, torch.nn.utils.rnn.PackedSequence):
-        x, xs = torch.nn.utils.rnn.pad_packed_sequence(batch)
+        x, xs = pad_packed_sequence(batch)
     elif isinstance(batch, torch.Tensor):
         x, xs = batch, [batch.size(0)] * batch.size(1)
     else:
@@ -92,6 +93,11 @@ class CTCLoss(Loss):
 
         # prepare tensors of the correct type
         x = torch.nn.functional.log_softmax(x, dim=-1)
+        
+        # Move tensors to CPU for CTC loss computation if on MPS
+        if x.device.type == "mps":
+            x = x.cpu()
+        
         cpu = torch.device("cpu")
         xs = (
             xs.detach().to(dtype=torch.int, device=cpu)
@@ -101,21 +107,25 @@ class CTCLoss(Loss):
         ys = torch.tensor([len(y_n) for y_n in y], dtype=torch.int, device=cpu)
         y = torch.tensor(list(itertools.chain.from_iterable(y)), dtype=torch.int)
 
-        with torch.backends.cudnn.flags(enabled=False):
-            losses = torch.nn.functional.ctc_loss(
-                log_probs=x,
-                targets=y,
-                input_lengths=xs,
-                target_lengths=ys,
-                blank=self.blank,
-                reduction="none",
-                zero_infinity=True,
-            )
-
         # keep valid indices
         valid_indices = torch.tensor(valid_indices, device=cpu)
-        losses = losses.index_select(0, valid_indices.to(device=losses.device))
+        x = x.index_select(1, valid_indices.to(device=x.device))  # Select valid batch items
         xs = xs.index_select(0, valid_indices)
+        ys = ys.index_select(0, valid_indices)
+
+        losses = torch.nn.functional.ctc_loss(
+            log_probs=x,
+            targets=y,
+            input_lengths=xs,
+            target_lengths=ys,
+            blank=self.blank,
+            reduction="none",
+            zero_infinity=True,
+        )
+
+        # Move result back to original device if needed
+        if x.device.type == "mps":
+            losses = losses.to(x.device)
 
         if self.average_frames:
             losses = losses / xs.to(losses)
