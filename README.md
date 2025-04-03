@@ -45,6 +45,74 @@ The following Python scripts will be installed in your system:
 
 Work in this toolkit was financially supported by the [Pattern Recognition and Human Language Technology (PRHLT) Research Center](https://www.prhlt.upv.es/wp/)
 
+
+# Training
+
+The system expects two main components:
+
+1. **Image Files**:
+   - Handwritten text images in a directory
+   - Common image formats (jpg, png, etc.)
+   - Images will be automatically:
+     - Converted to grayscale
+     - Resized to a fixed height (default 64px) while maintaining aspect ratio
+     - Normalized to [0, 1] range
+
+2. **Ground Truth Files** (JSON format):
+   - Separate files for training, validation, and testing
+   - Each file should be a JSON list of objects with this structure:
+```json
+[
+    {
+        "image": "path/to/image1.png",
+        "text": "transcription of the text"
+    },
+    {
+        "image": "path/to/image2.png",
+        "text": "another transcription"
+    },
+    ...
+]
+```
+
+3. **Character Map File** (JSON format):
+   - Maps characters to integer indices
+   - Must include all characters that appear in your transcriptions
+   - Index 0 is reserved for the CTC blank token
+   - Example:
+```json
+{
+    "<blank>": 0,
+    " ": 1,
+    "a": 2,
+    "b": 3,
+    "c": 4,
+    ...
+}
+```
+
+Here's a complete example of the directory structure:
+
+```
+data/
+├── images/
+│   ├── img1.png
+│   ├── img2.png
+│   └── ...
+├── char_map.json
+├── train.json
+├── val.json
+└── test.json
+```
+
+```bash
+python -m laia.scripts.htr.predict \
+    --checkpoint /Users/wjm55/PyLaia/output/lightning_logs/version_14/checkpoints/best-epoch=12-va_loss=128.2928.ckpt \
+    --image train/sample_27.png \
+    --char_map data/char_map.json \
+    --data_dir data
+```
+
 ## BibTeX
 
 ```
